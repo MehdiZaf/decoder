@@ -1,99 +1,108 @@
-// api/decode.js - برای Vercel Serverless Functions
+// api/decode.js - با fallbackهای متعدد
 export default async function handler(req, res) {
-  // فقط POST requests را قبول کن
+  // CORS headers اضافه کن
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'POST') {
-    return res.status(405).json({ 
-      error: 'Method not allowed',
-      message: 'Only POST requests are accepted' 
-    });
+    return res.status(405).json({ error: 'Use POST method with {"data": "encoded_string"}' });
   }
 
   try {
-    // دریافت body
-    const body = req.body;
+    const { data } = req.body;
     
-    if (!body || !body.data) {
-      return res.status(400).json({ 
-        error: 'Bad request',
-        message: 'Missing "data" field in request body' 
-      });
+    if (!data) {
+      return res.status(400).json({ error: 'No data provided' });
     }
 
-    const encodedString = body.data;
-    console.log('📥 Received data length:', encodedString.length);
-
-    // 1. استخراج بخش base64
-    let base64Part = encodedString;
+    console.log('Processing data length:', data.length);
     
-    // فرمت ۳: encrypted==json_base64@iv (جدیدترین)
-    if (encodedString.includes('==') && encodedString.includes('@')) {
-      const parts = encodedString.split('@');
-      if (parts.length >= 2) {
-        const beforeAt = parts[0];
-        const base64Parts = beforeAt.split('==');
-        if (base64Parts.length >= 2) {
-          base64Part = base64Parts[base64Parts.length - 1];
+    // لیست روش‌های استخراج
+    const extractionMethods = [
+      // روش ۱: == ... @ (جدیدترین)
+      (str) => {
+        const eqIndex = str.indexOf('==');
+        const atIndex = str.indexOf('@', eqIndex + 2);
+        if (eqIndex !== -1 && atIndex !== -1 && atIndex > eqIndex) {
+          return str.substring(eqIndex + 2, atIndex);
         }
+        return null;
+      },
+      
+      // روش ۲: == ... @@
+      (str) => {
+        const eqIndex = str.indexOf('==');
+        const atIndex = str.indexOf('@@', eqIndex + 2);
+        if (eqIndex !== -1 && atIndex !== -1 && atIndex > eqIndex) {
+          return str.substring(eqIndex + 2, atIndex);
+        }
+        return null;
+      },
+      
+      // روش ۳: = ... @
+      (str) => {
+        const eqIndex = str.indexOf('=');
+        const atIndex = str.indexOf('@', eqIndex + 1);
+        if (eqIndex !== -1 && atIndex !== -1 && atIndex > eqIndex) {
+          return str.substring(eqIndex + 1, atIndex);
+        }
+        return null;
+      },
+      
+      // روش ۴: کل رشته
+      (str) => str
+    ];
+
+    let base64Str = '';
+    let methodUsed = 'none';
+
+    // امتحان همه روش‌ها
+    for (let i = 0; i < extractionMethods.length; i++) {
+      try {
+        const result = extractionMethods[i](data);
+        if (result) {
+          base64Str = result;
+          methodUsed = method_${i + 1};
+          console.log(Using ${methodUsed}, extracted ${base64Str.length} chars);
+          break;
+        }
+      } catch (e) {
+        console.log(Method ${i + 1} failed:, e.message);
       }
     }
-    // فرمت ۲: encrypted==json_base64@@iv
-    else if (encodedString.includes('==') && encodedString.includes('@@')) {
-      const parts = encodedString.split('@@');
-      if (parts.length >= 2) {
-        const beforeAt = parts[0];
-        const base64Parts = beforeAt.split('==');
-        if (base64Parts.length >= 2) {
-          base64Part = base64Parts[base64Parts.length - 1];
-        }
-      }
-    }
-    // فرمت ۱: encrypted=json_base64@iv
-    else if (encodedString.includes('=') && encodedString.includes('@')) {
-      const parts = encodedString.split('@');
-      if (parts.length >= 2) {
-        const beforeAt = parts[0];
-        const base64Parts = beforeAt.split('=');
-        if (base64Parts.length >= 2) {
-          base64Part = base64Parts[base64Parts.length - 1];
-        }
-      }
-    }
+
+    // پاکسازی
+    base64Str = base64Str.replace(/\s/g, '');
     
-    console.log('📦 Base64 extracted:', base64Part.length, 'chars');
-
-    // 2. پاکسازی
-    let cleanBase64 = base64Part.replace(/\s/g, '');
-
-    // 3. اضافه کردن padding
-    while (cleanBase64.length % 4 !== 0) {
-      cleanBase64 += '=';
+    // padding
+    while (base64Str.length % 4 !== 0) {
+      base64Str += '=';
     }
 
-    console.log('🔧 Clean base64:', cleanBase64.length, 'chars');
+    console.log('Final base64:', base64Str.length, 'chars');
 
-    // 4. Decode با Buffer
-    const decodedString = Buffer.from(cleanBase64, 'base64').toString('utf8');
-    console.log('📖 Decoded length:', decodedString.length);
-
-    // 5. Parse JSON
-    const jsonData = JSON.parse(decodedString);
-
-    // 6. برگرداندن پاسخ
-    return res.status(200).json({
+    // decode
+    const decoded = Buffer.from(base64Str, 'base64').toString('utf8');
+    console.log('Decoded:', decoded.length, 'chars');
+    
+    const jsonResult = JSON.parse(decoded);
+    
+    return res.json({
       success: true,
-      data: jsonData,
-      decodedAt: new Date().toISOString()
+      method: methodUsed,
+      data: jsonResult
     });
 
   } catch (error) {
-    console.error('❌ Server error:', error);
-    
-    // برای debugging، جزئیات خطا را برگردان
+    console.error('Error:', error);
     return res.status(500).json({
-      error: 'Internal server error',
-      message: error.message,
-      // فقط در development جزئیات stack را برگردان
-      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+      error: error.message,
+      step: 'processing'
     });
   }
 }
