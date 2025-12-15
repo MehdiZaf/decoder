@@ -1,17 +1,8 @@
 {
   "name": "decoder",
   "version": "1.0.0",
-  "description": "Neshan Bus API Decoder",
+  "type": "module",
   "engines": {
     "node": ">=18"
-  },
-  "scripts": {
-    "dev": "vercel dev",
-    "start": "vercel start",
-    "deploy": "vercel deploy --prod"
-  },
-  "dependencies": {},
-  "devDependencies": {
-    "@vercel/node": "^3.0.0"
   }
 }
