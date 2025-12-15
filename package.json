@@ -1,0 +1,8 @@
+{
+  "name": "neshan-decoder",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node api/decode.js"
+  },
+  "dependencies": {}
+}
