@@ -1,27 +1,33 @@
-// decode.js - برای Vercel/Netlify Functions
+// api/decode.js - برای Vercel Serverless Functions
 export default async function handler(req, res) {
-  // فقط POST قبول کن
+  // فقط POST requests را قبول کن
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ 
+      error: 'Method not allowed',
+      message: 'Only POST requests are accepted' 
+    });
   }
 
   try {
-    const { data } = req.body;
+    // دریافت body
+    const body = req.body;
     
-    if (!data || typeof data !== 'string') {
-      return res.status(400).json({ error: 'Data field is required' });
+    if (!body || !body.data) {
+      return res.status(400).json({ 
+        error: 'Bad request',
+        message: 'Missing "data" field in request body' 
+      });
     }
 
-    console.log('📥 Received data length:', data.length);
-    
+    const encodedString = body.data;
+    console.log('📥 Received data length:', encodedString.length);
+
     // 1. استخراج بخش base64
-    let base64Part = data;
-    let format = 'unknown';
+    let base64Part = encodedString;
     
     // فرمت ۳: encrypted==json_base64@iv (جدیدترین)
-    if (data.includes('==') && data.includes('@')) {
-      format = 'format3';
-      const parts = data.split('@');
+    if (encodedString.includes('==') && encodedString.includes('@')) {
+      const parts = encodedString.split('@');
       if (parts.length >= 2) {
         const beforeAt = parts[0];
         const base64Parts = beforeAt.split('==');
@@ -31,9 +37,8 @@ export default async function handler(req, res) {
       }
     }
     // فرمت ۲: encrypted==json_base64@@iv
-    else if (data.includes('==') && data.includes('@@')) {
-      format = 'format2';
-      const parts = data.split('@@');
+    else if (encodedString.includes('==') && encodedString.includes('@@')) {
+      const parts = encodedString.split('@@');
       if (parts.length >= 2) {
         const beforeAt = parts[0];
         const base64Parts = beforeAt.split('==');
@@ -43,9 +48,8 @@ export default async function handler(req, res) {
       }
     }
     // فرمت ۱: encrypted=json_base64@iv
-    else if (data.includes('=') && data.includes('@')) {
-      format = 'format1';
-      const parts = data.split('@');
+    else if (encodedString.includes('=') && encodedString.includes('@')) {
+      const parts = encodedString.split('@');
       if (parts.length >= 2) {
         const beforeAt = parts[0];
         const base64Parts = beforeAt.split('=');
@@ -55,40 +59,41 @@ export default async function handler(req, res) {
       }
     }
     
-    console.log(🔍 Format detected: ${format});
-    console.log(📦 Base64 part length: ${base64Part.length});
-    
+    console.log('📦 Base64 extracted:', base64Part.length, 'chars');
+
     // 2. پاکسازی
     let cleanBase64 = base64Part.replace(/\s/g, '');
-    
+
     // 3. اضافه کردن padding
     while (cleanBase64.length % 4 !== 0) {
       cleanBase64 += '=';
     }
-    
-    console.log(🔧 Clean base64 length: ${cleanBase64.length});
-    
-    // 4. Decode
+
+    console.log('🔧 Clean base64:', cleanBase64.length, 'chars');
+
+    // 4. Decode با Buffer
     const decodedString = Buffer.from(cleanBase64, 'base64').toString('utf8');
-    console.log(📖 Decoded length: ${decodedString.length});
-    
+    console.log('📖 Decoded length:', decodedString.length);
+
     // 5. Parse JSON
     const jsonData = JSON.parse(decodedString);
-    
-    // 6. برگرداندن نتیجه
+
+    // 6. برگرداندن پاسخ
     return res.status(200).json({
-      ...jsonData,
-      _metadata: {
-        format,
-        decodedAt: new Date().toISOString()
-      }
+      success: true,
+      data: jsonData,
+      decodedAt: new Date().toISOString()
     });
-    
+
   } catch (error) {
-    console.error('❌ Error:', error);
+    console.error('❌ Server error:', error);
+    
+    // برای debugging، جزئیات خطا را برگردان
     return res.status(500).json({
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: 'Internal server error',
+      message: error.message,
+      // فقط در development جزئیات stack را برگردان
+      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
     });
   }
 }
