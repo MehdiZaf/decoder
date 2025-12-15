@@ -1,8 +1,17 @@
 {
   "name": "decoder",
   "version": "1.0.0",
-  "scripts": {
-    "start": "node api/decode.js"
+  "description": "Neshan Bus API Decoder",
+  "engines": {
+    "node": ">=18"
   },
-  "dependencies": {}
+  "scripts": {
+    "dev": "vercel dev",
+    "start": "vercel start",
+    "deploy": "vercel deploy --prod"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@vercel/node": "^3.0.0"
+  }
 }
