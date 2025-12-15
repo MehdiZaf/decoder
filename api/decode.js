@@ -117,3 +117,24 @@ export default async function handler(req, res) {
     console.log('📄 Parsing JSON...');
     const jsonData = JSON.parse(decoded);
     console.log('🎉 JSON parsed successfully!');
+    // 7. برگرداندن نتیجه
+    return res.status(200).json({
+      success: true,
+      data: jsonData,
+      metadata: {
+        originalLength: data.length,
+        cleanedLength: cleanBase64.length,
+        decodedAt: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error:', error.message);
+    
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      step: 'processing'
+    });
+  }
+}
