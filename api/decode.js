@@ -1,9 +1,7 @@
 // api/decode.js
 export default async function handler(req, res) {
-  // لاگ ورودی
   console.log('=== API DECODE STARTED ===');
   console.log('Method:', req.method);
-  console.log('Headers:', req.headers);
   
   // پشتیبانی از CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -15,44 +13,27 @@ export default async function handler(req, res) {
   }
   
   if (req.method !== 'POST') {
-    console.log('Wrong method, returning 405');
     return res.status(405).json({
       success: false,
-      error: 'Method not allowed. Use POST.',
-      receivedMethod: req.method
+      error: 'Method not allowed. Use POST.'
     });
   }
 
   try {
-    const body = req.body;
-    console.log('Request body type:', typeof body);
-    console.log('Request body keys:', Object.keys(body || {}));
+    const { data } = req.body;
     
-    if (!body || Object.keys(body).length === 0) {
-      console.log('Empty body received');
+    if (!data) {
       return res.status(400).json({
         success: false,
         error: 'No data provided in request body'
       });
     }
     
-    const { data } = body;
-    
-    if (!data) {
-      console.log('No "data" field in body');
-      return res.status(400).json({
-        success: false,
-        error: 'Missing "data" field in request body',
-        receivedFields: Object.keys(body)
-      });
-    }
-    
-    console.log('Data type:', typeof data);
     console.log('Data length:', data.length);
-    console.log('First 500 chars of data:', data.substring(0, 500));
+    console.log('Data sample (first 200):', data.substring(0, 200));
     
     // پردازش داده
-    const result = await processBusData(data);
+    const result = await decodeAndExtractAllBuses(data);
     
     console.log('=== API DECODE COMPLETED ===');
     console.log('Found buses:', result.totalBuses);
@@ -60,14 +41,12 @@ export default async function handler(req, res) {
     return res.status(200).json({
       success: true,
       ...result,
-      timestamp: new Date().toISOString(),
-      processingTime: result.processingTime
+      timestamp: new Date().toISOString()
     });
     
   } catch (error) {
     console.error('=== API DECODE ERROR ===');
     console.error('Error:', error.message);
-    console.error('Stack:', error.stack);
     
     return res.status(500).json({
       success: false,
@@ -77,345 +56,372 @@ export default async function handler(req, res) {
   }
 }
 
-async function processBusData(rawData) {
+async function decodeAndExtractAllBuses(rawData) {
   const startTime = Date.now();
   
-  console.log('\n=== PROCESS BUS DATA START ===');
-  console.log('Raw data length:', rawData.length);
+  console.log('\n=== DECODE AND EXTRACT ALL BUSES ===');
+  console.log('Raw input length:', rawData.length);
   
-  // 1. استخراج بخش اصلی
-  const extracted = extractMainContent(rawData);
-  console.log('Extracted length:', extracted.length);
-  console.log('Extracted first 200 chars:', extracted.substring(0, 200));
+  // 1. ابتدا سعی می‌کنیم مستقیماً decode کنیم (ممکن است کل داده base64 باشد)
+  let decodedText = rawData;
   
-  // 2. تشخیص و decode اگر base64 باشد
-  const decoded = await decodeIfBase64(extracted);
-  console.log('Decoded length:', decoded.length);
-  console.log('Decoded first 200 chars:', decoded.substring(0, 200));
+  // 2. بررسی و decode اگر base64 باشد
+  const base64Sections = extractAllBase64Sections(rawData);
+  console.log(`Found ${base64Sections.length} potential base64 sections`);
   
-  // 3. پاکسازی
-  const cleaned = cleanText(decoded);
-  console.log('Cleaned length:', cleaned.length);
+  // 3. سعی می‌کنیم هر بخش base64 را decode کنیم
+  const allDecodedResults = [];
   
-  // 4. استخراج JSON
-  const jsonData = extractJsonData(cleaned);
-  console.log('JSON extracted, type:', typeof jsonData);
-  
-  // 5. استخراج اتوبوس‌ها
-  const buses = extractBusesFromData(jsonData, cleaned);
-  console.log('Buses found:', buses.length);
-  
-  const processingTime = Date.now() - startTime;
-  
-  console.log('=== PROCESS BUS DATA END ===\n');
-  
-  return {
-    totalBuses: buses.length,
-    buses: buses,
-    processingTime: `${processingTime}ms`,
-    rawDataSample: rawData.substring(0, 100),
-    extractedSample: extracted.substring(0, 100),
-    decodedSample: decoded.substring(0, 100)
-  };
-}
-
-function extractMainContent(text) {
-  console.log('Extracting main content...');
-  
-  // چندین استراتژی برای استخراج
-  
-  // استراتژی 1: پیدا کردن base64 بعد از ==
-  const doubleEqualsIndex = text.lastIndexOf('==');
-  if (doubleEqualsIndex !== -1) {
-    const afterEquals = text.substring(doubleEqualsIndex + 2);
-    console.log('Found == at position', doubleEqualsIndex, 'after length:', afterEquals.length);
+  for (let i = 0; i < base64Sections.length; i++) {
+    const section = base64Sections[i];
+    console.log(`\nProcessing base64 section ${i + 1}, length: ${section.length}`);
     
-    // حذف کاراکترهای @
-    const withoutAt = afterEquals.replace(/@/g, '');
-    
-    // پیدا کردن پایان معتبر
-    const base64Match = withoutAt.match(/^[A-Za-z0-9+/]+=*/);
-    if (base64Match && base64Match[0].length > 50) {
-      console.log('Strategy 1 successful, length:', base64Match[0].length);
-      return base64Match[0];
-    }
-  }
-  
-  // استراتژی 2: پیدا کردن eyJ (شروع base64 با JSON)
-  const eyjIndex = text.indexOf('eyJ');
-  if (eyjIndex !== -1) {
-    const afterEyj = text.substring(eyjIndex);
-    const base64Match = afterEyj.match(/^[A-Za-z0-9+/]+=*/);
-    if (base64Match && base64Match[0].length > 50) {
-      console.log('Strategy 2 successful, length:', base64Match[0].length);
-      return base64Match[0];
-    }
-  }
-  
-  // استراتژی 3: پیدا کردن هر base64 طولانی
-  const base64Regex = /[A-Za-z0-9+/]{100,}=*/g;
-  const matches = text.match(base64Regex);
-  if (matches && matches.length > 0) {
-    // طولانی‌ترین را انتخاب کن
-    const longest = matches.reduce((a, b) => a.length > b.length ? a : b);
-    console.log('Strategy 3 successful, length:', longest.length);
-    return longest;
-  }
-  
-  // استراتژی 4: برگرداندن کل متن
-  console.log('Strategy 4: Using entire text');
-  return text;
-}
-
-async function decodeIfBase64(text) {
-  console.log('Checking if base64...');
-  
-  // بررسی valid بودن base64
-  if (!isValidBase64(text)) {
-    console.log('Not valid base64, returning as is');
-    return text;
-  }
-  
-  try {
-    // سعی در decode
-    const decoded = Buffer.from(text, 'base64').toString('utf8');
-    console.log('Base64 decoded successfully');
-    return decoded;
-  } catch (error) {
-    console.log('Base64 decode failed:', error.message);
-    return text;
-  }
-}
-
-function cleanText(text) {
-  console.log('Cleaning text...');
-  
-  let cleaned = text;
-  
-  // حذف کاراکترهای کنترلی
-  cleaned = cleaned.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
-  
-  // حذف null bytes
-  cleaned = cleaned.replace(/\0/g, '');
-  
-  // حذف کاراکترهای خاص
-  cleaned = cleaned.replace(/@/g, '');
-  
-  // trim
-  cleaned = cleaned.trim();
-  
-  console.log('Cleaned from', text.length, 'to', cleaned.length, 'chars');
-  return cleaned;
-}
-
-function extractJsonData(text) {
-  console.log('Extracting JSON data...');
-  
-  // اول سعی می‌کنیم مستقیماً JSON.parse کنیم
-  try {
-    const parsed = JSON.parse(text);
-    console.log('Direct JSON parse successful');
-    return parsed;
-  } catch (e) {
-    console.log('Direct parse failed:', e.message);
-  }
-  
-  // اگر نشد، سعی می‌کنیم JSON را از متن استخراج کنیم
-  try {
-    // پیدا کردن اولین { یا [
-    const startObj = text.indexOf('{');
-    const startArray = text.indexOf('[');
-    
-    let start = -1;
-    let endChar = '';
-    
-    if (startObj !== -1 && (startArray === -1 || startObj < startArray)) {
-      start = startObj;
-      endChar = '}';
-    } else if (startArray !== -1) {
-      start = startArray;
-      endChar = ']';
-    }
-    
-    if (start !== -1) {
-      // پیدا کردن پایان متناسب
-      let depth = 0;
-      let inString = false;
-      let escapeNext = false;
-      let end = -1;
+    try {
+      // اضافه کردن padding اگر لازم باشد
+      const paddedSection = addBase64Padding(section);
       
-      for (let i = start; i < text.length; i++) {
-        const char = text[i];
-        
-        if (escapeNext) {
-          escapeNext = false;
-          continue;
-        }
-        
-        if (char === '\\') {
-          escapeNext = true;
-          continue;
-        }
-        
-        if (char === '"' && !escapeNext) {
-          inString = !inString;
-          continue;
-        }
-        
-        if (!inString) {
-          if (char === '{' || char === '[') {
-            depth++;
-          } else if (char === '}' || char === ']') {
-            depth--;
-            if (depth === 0) {
-              end = i + 1;
-              break;
-            }
-          }
-        }
-      }
+      // decode
+      const decoded = Buffer.from(paddedSection, 'base64').toString('utf8');
+      console.log(`Section ${i + 1} decoded successfully, length: ${decoded.length}`);
+      console.log(`First 100 chars: ${decoded.substring(0, 100)}`);
       
-      if (end !== -1) {
-        const jsonStr = text.substring(start, end);
-        console.log('Extracted JSON string, length:', jsonStr.length);
-        
-        try {
-          const parsed = JSON.parse(jsonStr);
-          console.log('Extracted JSON parse successful');
-          return parsed;
-        } catch (e) {
-          console.log('Extracted JSON parse failed:', e.message);
-          
-          // تلاش برای رفع مشکلات
-          const fixed = fixJsonString(jsonStr);
-          try {
-            const parsed = JSON.parse(fixed);
-            console.log('Fixed JSON parse successful');
-            return parsed;
-          } catch (e2) {
-            console.log('Fixed JSON also failed');
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.log('JSON extraction error:', e.message);
-  }
-  
-  // اگر هیچکدام کار نکرد، متن خام را برمی‌گردانیم
-  console.log('Returning raw text as data');
-  return { rawText: text };
-}
-
-function extractBusesFromData(jsonData, rawText) {
-  console.log('Extracting buses from data...');
-  
-  const buses = [];
-  
-  // روش 1: از JSON پارس شده
-  if (jsonData && typeof jsonData === 'object') {
-    // ساختارهای مختلف
-    const possiblePaths = [
-      jsonData.lines,          // {lines: [...]}
-      jsonData.buses,          // {buses: [...]}
-      jsonData.data,           // {data: [...]}
-      jsonData.result,         // {result: [...]}
-      jsonData.items,          // {items: [...]}
-      jsonData.values,         // {values: [...]}
-      jsonData                // ممکن است مستقیماً آرایه باشد
-    ];
-    
-    for (const data of possiblePaths) {
-      if (Array.isArray(data) && data.length > 0) {
-        console.log('Found array with', data.length, 'items');
-        
-        data.forEach((item, index) => {
-          if (item && typeof item === 'object') {
-            const bus = createBusObject(item, index);
-            if (bus) {
-              buses.push(bus);
-            }
-          }
-        });
-        
-        if (buses.length > 0) {
-          console.log('Extracted', buses.length, 'buses from JSON array');
-          break;
-        }
-      }
-    }
-  }
-  
-  // روش 2: اگر هنوز اتوبوسی نداریم، از regex روی متن خام استفاده می‌کنیم
-  if (buses.length === 0) {
-    console.log('No buses found in JSON, trying regex on raw text...');
-    const regexBuses = extractBusesWithRegex(rawText);
-    buses.push(...regexBuses);
-  }
-  
-  // روش 3: استخراج شماره اتوبوس‌ها
-  if (buses.length === 0) {
-    console.log('Trying to extract bus numbers...');
-    const busNumbers = extractBusNumbers(rawText);
-    busNumbers.forEach((number, index) => {
-      buses.push({
-        id: index + 1,
-        busNumber: number,
-        title: `اتوبوس ${number}`,
-        etaText: '',
-        etaValue: null,
-        originName: '',
-        destinationName: '',
-        iconUrl: null,
-        slug: null,
-        extractedBy: 'numberPattern'
+      allDecodedResults.push({
+        source: `base64_section_${i + 1}`,
+        text: decoded,
+        length: decoded.length
       });
+      
+    } catch (decodeError) {
+      console.log(`Section ${i + 1} decode failed: ${decodeError.message}`);
+    }
+  }
+  
+  // 4. اگر هیچ بخشی decode نشد، کل داده را به عنوان متن در نظر بگیر
+  if (allDecodedResults.length === 0) {
+    allDecodedResults.push({
+      source: 'raw_text',
+      text: rawData,
+      length: rawData.length
     });
   }
   
-  console.log('Total buses extracted:', buses.length);
+  // 5. پردازش تمام نتایج decode شده
+  const allBuses = [];
+  
+  for (const result of allDecodedResults) {
+    console.log(`\nProcessing ${result.source}...`);
+    const buses = extractBusesFromText(result.text);
+    console.log(`Found ${buses.length} buses in ${result.source}`);
+    allBuses.push(...buses);
+  }
+  
+  // 6. حذف موارد تکراری
+  const uniqueBuses = removeDuplicateBuses(allBuses);
+  
+  const processingTime = Date.now() - startTime;
+  
+  console.log('\n=== FINAL RESULTS ===');
+  console.log(`Total unique buses: ${uniqueBuses.length}`);
+  console.log(`Processing time: ${processingTime}ms`);
+  
+  return {
+    totalBuses: uniqueBuses.length,
+    buses: uniqueBuses,
+    processingTime: `${processingTime}ms`,
+    rawDataLength: rawData.length,
+    decodedSections: allDecodedResults.length,
+    debug: {
+      rawSample: rawData.substring(0, 100),
+      firstBase64Section: base64Sections[0] ? base64Sections[0].substring(0, 100) : 'none'
+    }
+  };
+}
+
+function extractAllBase64Sections(text) {
+  const sections = [];
+  
+  // الگوی base64 استاندارد
+  const base64Regex = /(eyJ[a-zA-Z0-9+/]*=*)/g;
+  const matches = text.match(base64Regex) || [];
+  
+  // همچنین الگوهای دیگر base64
+  const alternativePatterns = [
+    /([A-Za-z0-9+/]{50,}=*)/g,
+    /==([A-Za-z0-9+/]{20,})=*/g
+  ];
+  
+  for (const pattern of alternativePatterns) {
+    const altMatches = text.match(pattern) || [];
+    altMatches.forEach(match => {
+      // حذف == از ابتدا اگر وجود دارد
+      const cleanMatch = match.startsWith('==') ? match.substring(2) : match;
+      if (cleanMatch.length >= 20) {
+        matches.push(cleanMatch);
+      }
+    });
+  }
+  
+  // فیلتر کردن و مرتب‌سازی بر اساس طول
+  const uniqueMatches = [...new Set(matches)];
+  uniqueMatches.sort((a, b) => b.length - a.length);
+  
+  // فقط موارد با طول کافی
+  return uniqueMatches.filter(section => section.length >= 20);
+}
+
+function addBase64Padding(str) {
+  let padded = str;
+  
+  // حذف کاراکترهای غیر base64
+  padded = padded.replace(/[^A-Za-z0-9+/=]/g, '');
+  
+  // اضافه کردن padding اگر لازم باشد
+  const padCount = 4 - (padded.length % 4);
+  if (padCount < 4) {
+    padded += '='.repeat(padCount);
+  }
+  
+  return padded;
+}
+
+function extractBusesFromText(text) {
+  console.log('Extracting buses from text, length:', text.length);
+  
+  const buses = [];
+  
+  // 1. سعی می‌کنیم JSON را مستقیماً parse کنیم
+  try {
+    const jsonData = JSON.parse(text);
+    const jsonBuses = extractBusesFromJSON(jsonData);
+    buses.push(...jsonBuses);
+    console.log(`Extracted ${jsonBuses.length} buses from direct JSON parse`);
+  } catch (e) {
+    console.log('Direct JSON parse failed, trying other methods...');
+  }
+  
+  // 2. استخراج JSON از متن
+  if (buses.length === 0) {
+    const jsonStrings = extractJSONStrings(text);
+    for (const jsonStr of jsonStrings) {
+      try {
+        const jsonData = JSON.parse(jsonStr);
+        const jsonBuses = extractBusesFromJSON(jsonData);
+        buses.push(...jsonBuses);
+        console.log(`Extracted ${jsonBuses.length} buses from extracted JSON`);
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+  
+  // 3. استخراج با regex از متن خام
+  if (buses.length === 0) {
+    const regexBuses = extractBusesWithAdvancedRegex(text);
+    buses.push(...regexBuses);
+    console.log(`Extracted ${regexBuses.length} buses with regex`);
+  }
+  
+  // 4. استخراج از ساختارهای خاص
+  const structuredBuses = extractFromStructures(text);
+  buses.push(...structuredBuses);
+  console.log(`Extracted ${structuredBuses.length} buses from structures`);
+  
   return buses;
 }
 
-function createBusObject(item, index) {
+function extractJSONStrings(text) {
+  const jsonStrings = [];
+  
+  // پیدا کردن تمام { ... } یا [ ... ]
+  const jsonPattern = /(\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\}))*\}))*\})|(\[(?:[^\[\]]|(?:\[(?:[^\[\]]|(?:\[[^\[\]]*\]))*\]))*\])/g;
+  
+  let match;
+  while ((match = jsonPattern.exec(text)) !== null) {
+    const jsonStr = match[0];
+    if (jsonStr.length > 50) { // حداقل طول برای JSON معنی‌دار
+      jsonStrings.push(jsonStr);
+    }
+  }
+  
+  // همچنین پیدا کردن JSONهای ناقص و تلاش برای ترمیم آنها
+  const start = text.indexOf('{"lines":');
+  if (start !== -1) {
+    // پیدا کردن پایان احتمالی
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    
+    for (let i = start; i < text.length; i++) {
+      const char = text[i];
+      
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      
+      if (char === '\\') {
+        escape = true;
+        continue;
+      }
+      
+      if (char === '"' && !escape) {
+        inString = !inString;
+        continue;
+      }
+      
+      if (!inString) {
+        if (char === '{' || char === '[') {
+          depth++;
+        } else if (char === '}' || char === ']') {
+          depth--;
+          if (depth === 0) {
+            const jsonStr = text.substring(start, i + 1);
+            jsonStrings.push(jsonStr);
+            break;
+          }
+        }
+      }
+    }
+  }
+  
+  return jsonStrings;
+}
+
+function extractBusesFromJSON(jsonData) {
+  const buses = [];
+  
+  if (!jsonData || typeof jsonData !== 'object') {
+    return buses;
+  }
+  
+  // ساختارهای مختلف
+  const structures = [
+    { path: 'lines', isArray: true },
+    { path: 'buses', isArray: true },
+    { path: 'data', isArray: true },
+    { path: 'items', isArray: true },
+    { path: 'results', isArray: true },
+    { path: '', isArray: Array.isArray(jsonData) } // اگر خود jsonData آرایه باشد
+  ];
+  
+  for (const structure of structures) {
+    let items = [];
+    
+    if (structure.path && jsonData[structure.path]) {
+      items = jsonData[structure.path];
+    } else if (structure.isArray) {
+      items = jsonData;
+    }
+    
+    if (Array.isArray(items)) {
+      items.forEach((item, index) => {
+        if (item && typeof item === 'object') {
+          const bus = createCompleteBusObject(item, index + 1);
+          if (bus) {
+            buses.push(bus);
+          }
+        }
+      });
+      
+      if (buses.length > 0) {
+        break;
+      }
+    }
+  }
+  
+  return buses;
+}
+
+function createCompleteBusObject(item, id) {
   try {
-    // پیدا کردن شماره اتوبوس از فیلدهای مختلف
+    // استخراج شماره اتوبوس از فیلدهای مختلف
     const busNumber = 
       item.busNumber || 
       item.number || 
       item.line || 
       item.lineNumber || 
       item.bus || 
+      item.routeNumber || 
       item.id || 
-      `BUS_${index + 1}`;
+      `BUS_${id}`;
     
-    // پیدا کردن عنوان
+    // استخراج عنوان
     const title = 
       item.title || 
       item.name || 
       item.route || 
       item.description || 
+      item.displayName || 
       '';
     
-    // پیدا کردن ETA
+    // استخراج ETA
     const etaText = 
       item.etaText || 
       item.eta || 
       item.time || 
       item.arrivalTime || 
+      item.arrival || 
       '';
     
+    // استخراج مقادیر عددی
+    const etaValue = 
+      item.etaValue || 
+      item.timeValue || 
+      item.duration || 
+      item.minutes || 
+      null;
+    
+    // مبدأ و مقصد
+    const originName = 
+      item.originName || 
+      item.origin || 
+      item.from || 
+      item.start || 
+      '';
+    
+    const destinationName = 
+      item.destinationName || 
+      item.destination || 
+      item.to || 
+      item.end || 
+      '';
+    
+    // URL تصویر
+    const iconUrl = 
+      item.iconUrl || 
+      item.icon || 
+      item.image || 
+      item.photo || 
+      null;
+    
+    // slug
+    const slug = 
+      item.slug || 
+      item.code || 
+      item.shortName || 
+      null;
+    
+    // اطلاعات اضافی
+    const additionalInfo = {
+      vehicleType: item.vehicleType || item.type || 'bus',
+      status: item.status || item.state || 'active',
+      distance: item.distance || item.distanceValue || null,
+      coordinates: item.coordinates || item.location || null,
+      frequency: item.frequency || item.interval || null
+    };
+    
     return {
-      id: index + 1,
+      id: id,
       busNumber,
       title,
       etaText,
-      etaValue: item.etaValue || item.timeValue || null,
-      originName: item.originName || item.origin || '',
-      destinationName: item.destinationName || item.destination || '',
-      iconUrl: item.iconUrl || item.icon || null,
-      slug: item.slug || null,
-      extractedBy: 'jsonParse'
+      etaValue,
+      originName,
+      destinationName,
+      iconUrl,
+      slug,
+      additionalInfo,
+      rawItem: Object.keys(item).length > 10 ? { ...item } : item // برای جلوگیری از حجم زیاد
     };
   } catch (error) {
     console.error('Error creating bus object:', error);
@@ -423,152 +429,147 @@ function createBusObject(item, index) {
   }
 }
 
-function extractBusesWithRegex(text) {
+function extractBusesWithAdvancedRegex(text) {
   const buses = [];
-  let id = 1;
+  const busMap = new Map(); // برای جلوگیری از تکرار
   
-  console.log('Extracting with regex, text length:', text.length);
+  // الگوهای پیشرفته برای پیدا کردن اتوبوس‌ها
+  const patterns = [
+    // الگوی کامل برای busNumber و title
+    /"busNumber"\s*:\s*"([^"]+)"[^{}]*"title"\s*:\s*"([^"]+)"/g,
+    
+    // الگوی ساده‌تر
+    /"busNumber"\s*:\s*"([^"]+)"/g,
+    /"number"\s*:\s*"(\d+(?:\.\d+)?)"/g,
+    /"line"\s*:\s*"([^"]+)"/g,
+    
+    // الگوهای فارسی
+    /"عنوان"\s*:\s*"([^"]+)"[^{}]*"شماره"\s*:\s*"([^"]+)"/g,
+    /"شماره"\s*:\s*"([^"]+)"/g
+  ];
   
-  // الگوی اصلی: "busNumber":"..."
-  const busNumberRegex = /"busNumber"\s*:\s*"([^"]+)"/g;
-  let match;
-  
-  while ((match = busNumberRegex.exec(text)) !== null) {
-    const busNumber = match[1];
-    console.log('Found bus number via regex:', busNumber);
+  for (const pattern of patterns) {
+    const matches = [...text.matchAll(pattern)];
     
-    // سعی می‌کنیم اطلاعات بیشتر را از اطراف این match پیدا کنیم
-    const start = Math.max(0, match.index - 200);
-    const end = Math.min(text.length, match.index + 400);
-    const context = text.substring(start, end);
-    
-    // استخراج title از context
-    let title = '';
-    const titleMatch = context.match(/"title"\s*:\s*"([^"]+)"/);
-    if (titleMatch) {
-      title = titleMatch[1];
-    }
-    
-    // استخراج etaText از context
-    let etaText = '';
-    const etaMatch = context.match(/"etaText"\s*:\s*"([^"]+)"/);
-    if (etaMatch) {
-      etaText = etaMatch[1];
-    }
-    
-    buses.push({
-      id: id++,
-      busNumber,
-      title: title || `اتوبوس ${busNumber}`,
-      etaText,
-      etaValue: null,
-      originName: '',
-      destinationName: '',
-      iconUrl: null,
-      slug: null,
-      extractedBy: 'regex'
-    });
-  }
-  
-  // اگر با busNumber چیزی پیدا نکردیم، سایر الگوها را امتحان می‌کنیم
-  if (buses.length === 0) {
-    const numberRegex = /"number"\s*:\s*"(\d+(?:\.\d+)?)"/g;
-    while ((match = numberRegex.exec(text)) !== null) {
-      const number = match[1];
-      // فقط اعداد معقول (مثل شماره اتوبوس)
-      if (parseFloat(number) > 5 && parseFloat(number) < 1000) {
-        buses.push({
-          id: id++,
-          busNumber: number,
-          title: `اتوبوس ${number}`,
-          etaText: '',
+    for (const match of matches) {
+      let busNumber, title;
+      
+      if (match.length >= 3) {
+        // اگر هم شماره و هم عنوان را گرفتیم
+        busNumber = match[1];
+        title = match[2];
+      } else {
+        // فقط شماره
+        busNumber = match[1];
+        title = `اتوبوس ${busNumber}`;
+      }
+      
+      // فقط اگر شماره معتبر باشد
+      if (busNumber && busNumber.length > 0 && !busMap.has(busNumber)) {
+        // سعی می‌کنیم ETA را از اطراف پیدا کنیم
+        const start = Math.max(0, match.index - 200);
+        const end = Math.min(text.length, match.index + 500);
+        const context = text.substring(start, end);
+        
+        let etaText = '';
+        const etaMatch = context.match(/"etaText"\s*:\s*"([^"]+)"/);
+        if (etaMatch) {
+          etaText = etaMatch[1];
+        }
+        
+        const bus = {
+          id: buses.length + 1,
+          busNumber,
+          title,
+          etaText,
           etaValue: null,
           originName: '',
           destinationName: '',
           iconUrl: null,
           slug: null,
-          extractedBy: 'numberRegex'
-        });
+          extractedBy: 'regex'
+        };
+        
+        buses.push(bus);
+        busMap.set(busNumber, true);
       }
+    }
+    
+    if (buses.length > 0) {
+      break;
     }
   }
   
-  console.log('Regex extracted', buses.length, 'buses');
   return buses;
 }
 
-function extractBusNumbers(text) {
-  // پیدا کردن اعدادی که ممکن است شماره اتوبوس باشند
-  const numberPattern = /\b\d{1,3}(?:\.\d{1,2})?\b/g;
-  const matches = text.match(numberPattern) || [];
+function extractFromStructures(text) {
+  const buses = [];
   
-  // فیلتر کردن: فقط اعداد معقول برای شماره اتوبوس
-  const busNumbers = [];
-  const seen = new Set();
-  
-  for (const num of matches) {
-    const n = parseFloat(num);
-    // معیارهای شماره اتوبوس: معمولاً بین 5 تا 999 و اغلب بدون اعشار یا با یک رقم اعشار
-    if (n >= 5 && n <= 999 && !seen.has(num)) {
-      // بررسی کنید که آیا این عدد در یک زمینه معقول ظاهر شده است
-      const index = text.indexOf(num);
-      const context = text.substring(Math.max(0, index - 20), Math.min(text.length, index + 20));
+  // الگو برای پیدا کردن آرایه lines
+  const linesMatch = text.match(/"lines"\s*:\s*(\[[^\]]*?\])/);
+  if (linesMatch) {
+    try {
+      const linesStr = linesMatch[1];
+      const linesData = JSON.parse(linesStr);
       
-      // اگر در نزدیکی کلمات کلیدی باشد، احتمالاً شماره اتوبوس است
-      if (context.includes('bus') || context.includes('خط') || context.includes('اتوبوس')) {
-        busNumbers.push(num);
-        seen.add(num);
+      if (Array.isArray(linesData)) {
+        linesData.forEach((item, index) => {
+          const bus = createCompleteBusObject(item, index + 1);
+          if (bus) {
+            buses.push(bus);
+          }
+        });
       }
+    } catch (e) {
+      console.log('Failed to parse lines array:', e.message);
     }
   }
   
-  console.log('Extracted bus numbers:', busNumbers);
-  return busNumbers;
+  // الگو برای پیدا کردن آبجکت‌های تکی
+  const objectPattern = /\{([^{}]*"busNumber"[^{}]*)\}/g;
+  let match;
+  
+  while ((match = objectPattern.exec(text)) !== null) {
+    try {
+      const objStr = `{${match[1]}}`;
+      const obj = JSON.parse(objStr);
+      const bus = createCompleteBusObject(obj, buses.length + 1);
+      if (bus) {
+        buses.push(bus);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+  
+  return buses;
 }
 
-function fixJsonString(jsonStr) {
-  let fixed = jsonStr;
+function removeDuplicateBuses(buses) {
+  const uniqueBuses = [];
+  const seen = new Set();
   
-  // رفع نقل قول‌های ناتمام
-  const quoteCount = (fixed.match(/"/g) || []).length;
-  if (quoteCount % 2 !== 0) {
-    fixed = fixed + '"';
+  for (const bus of buses) {
+    const key = `${bus.busNumber}_${bus.title}`;
+    if (!seen.has(key) && bus.busNumber) {
+      seen.add(key);
+      uniqueBuses.push(bus);
+    }
   }
   
-  // حذف ویرگول اضافی قبل از } یا ]
-  fixed = fixed.replace(/,\s*([\]}])/g, '$1');
+  // مرتب‌سازی بر اساس شماره اتوبوس
+  uniqueBuses.sort((a, b) => {
+    // تبدیل به عدد برای مرتب‌سازی صحیح
+    const numA = parseFloat(a.busNumber) || 0;
+    const numB = parseFloat(b.busNumber) || 0;
+    return numA - numB;
+  });
   
-  // بستن براکت‌های باز
-  const openBraces = (fixed.match(/\{/g) || []).length;
-  const closeBraces = (fixed.match(/\}/g) || []).length;
-  if (openBraces > closeBraces) {
-    fixed = fixed + '}'.repeat(openBraces - closeBraces);
-  }
+  // تنظیم مجدد idها
+  uniqueBuses.forEach((bus, index) => {
+    bus.id = index + 1;
+  });
   
-  const openBrackets = (fixed.match(/\[/g) || []).length;
-  const closeBrackets = (fixed.match(/\]/g) || []).length;
-  if (openBrackets > closeBrackets) {
-    fixed = fixed + ']'.repeat(openBrackets - closeBrackets);
-  }
-  
-  return fixed;
-}
-
-function isValidBase64(str) {
-  if (typeof str !== 'string') return false;
-  
-  // طول باید مضرب ۴ باشد
-  if (str.length % 4 !== 0) return false;
-  
-  // الگوی base64
-  const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
-  if (!base64Regex.test(str)) return false;
-  
-  // سعی در decode برای اطمینان
-  try {
-    Buffer.from(str, 'base64');
-    return true;
-  } catch (e) {
-    return false;
-  }
+  return uniqueBuses;
 }
