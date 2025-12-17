@@ -12,7 +12,7 @@ export default async function handler(req, res) {
     // استفاده از node-fetch برای کنترل بیشتر
     const fetch = (await import('node-fetch')).default;
     
-    const url = 'https://neshan.org/maps/pwa-api/transportation/passing-lines/mashhad/8e33926b993a09c491581db220c58636';
+    const url = 'https://neshan.org/maps/pwa-api/transportation/passing-lines/mashhad/8d2088d8f68e321965da2bd4537a3bb1';
     
     console.log('Fetching with browser-like headers...');
     
