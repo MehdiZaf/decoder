@@ -1,6 +1,6 @@
 // api/neshan-complete.js
 export default async function handler(req, res) {
-  console.log('=== NESHAN COMPLETE PROXY - ULTIMATE FIX ===');
+  console.log('=== NESHAN PROXY - COMPLETE BODY FETCH ===');
   
   res.setHeader('Access-Control-Allow-Origin', '*');
   
@@ -10,123 +10,166 @@ export default async function handler(req, res) {
   
   const API_URL = 'https://neshan.org/maps/pwa-api/transportation/passing-lines/mashhad/8d2088d8f68e321965da2bd4537a3bb1';
   
-  try {
-    const fetch = (await import('node-fetch')).default;
-    
-    // 1. درخواست اولیه برای دریافت داده
-    let response = await fetch(API_URL, {
-      headers: {
-        'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://neshan.org/',
-        'Origin': 'https://neshan.org',
-        'Connection': 'keep-alive',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-        'DNT': '1'
-      },
-      timeout: 60000, // 60 ثانیه timeout
-      compress: true,
-      follow: 10
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    
-    // 2. دریافت کل داده به صورت متن
-    const base64Data = await response.text();
-    console.log(`طول داده دریافتی: ${base64Data.length} کاراکتر`);
-    
-    // 3. اگر داده کمتر از حد انتظار است، retry با پارامترهای مختلف
-    let finalData = base64Data;
-    
-    if (base64Data.length < 3400) { // طول مورد انتظار برای داده کامل
-      console.log('داده کوتاه دریافت شد، تلاش مجدد با تنظیمات مختلف...');
+  // تابع برای دریافت کامل body با timeout
+  async function fetchCompleteBody(url) {
+    return new Promise(async (resolve, reject) => {
+      const { default: fetch } = await import('node-fetch');
+      const AbortController = global.AbortController || (await import('abort-controller')).default;
       
-      // تلاش دوم با headers متفاوت
-      response = await fetch(API_URL, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Accept-Encoding': 'identity', // غیرفعال کردن compression
-          'Connection': 'keep-alive',
-          'Upgrade-Insecure-Requests': '1',
-          'Cache-Control': 'max-age=0'
-        },
-        timeout: 60000,
-        compress: false, // غیرفعال کردن compression
-        follow: 10
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => {
+        controller.abort();
+        reject(new Error('Timeout بعد از 45 ثانیه'));
+      }, 45000);
       
-      const retryData = await response.text();
-      console.log(`طول داده در تلاش دوم: ${retryData.length} کاراکتر`);
-      
-      // استفاده از داده بلندتر
-      finalData = retryData.length > base64Data.length ? retryData : base64Data;
-    }
-    
-    // 4. بررسی وجود marker کامل بودن داده
-    // داده کامل باید شامل این sequence باشد: }}==eyJsaW5lcyI6W3s=
-    const hasCompleteMarker = finalData.includes('}}==eyJsaW5lcyI6W3s=');
-    const busCountEstimate = (finalData.match(/busNumber/g) || []).length;
-    
-    console.log(`دارای marker کامل: ${hasCompleteMarker}`);
-    console.log(`تخمین تعداد اتوبوس: ${busCountEstimate}`);
-    
-    // 5. اگر داده هنوز ناقص است، سعی در ترمیم آن
-    let processedData = finalData;
-    let wasFixed = false;
-    
-    if (!hasCompleteMarker && finalData.includes('@')) {
-      console.log('در حال ترمیم داده ناقص...');
-      
-      // حذف everything بعد از @
-      const atIndex = finalData.indexOf('@');
-      if (atIndex > 0) {
-        processedData = finalData.substring(0, atIndex);
-        wasFixed = true;
+      try {
+        const response = await fetch(url, {
+          headers: {
+            'Accept': '*/*',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Referer': 'https://neshan.org/',
+            'Origin': 'https://neshan.org',
+            'Connection': 'keep-alive'
+          },
+          signal: controller.signal,
+          compress: true,
+          timeout: 45000,
+          // غیرفعال کردن redirect limit
+          follow: 20
+        });
         
-        // سعی کن به آخرین structure معتبر برسی
-        // پیدا کردن آخرین }}==eyJli (یا pattern مشابه)
-        const lastPatternIndex = processedData.lastIndexOf('}}==eyJ');
-        if (lastPatternIndex > 0) {
-          // اضافه کردن طول pattern کامل
-          processedData = processedData.substring(0, lastPatternIndex + 7);
-          console.log('بر اساس pattern ترمیم شد');
+        clearTimeout(timeout);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
+        
+        // دریافت کل body به صورت متن
+        const body = await response.text();
+        resolve(body);
+        
+      } catch (error) {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    });
+  }
+  
+  // تابع fallback با روش متفاوت
+  async function fetchWithRetry(url, retries = 2) {
+    for (let i = 0; i <= retries; i++) {
+      try {
+        console.log(`تلاش ${i + 1} از ${retries + 1}`);
+        
+        const { default: fetch } = await import('node-fetch');
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/plain, */*',
+            'Accept-Encoding': 'identity', // مهم: غیرفعال کردن compression
+            'Cache-Control': 'no-cache'
+          },
+          timeout: 30000,
+          compress: false // مهم: غیرفعال کردن compression
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        
+        // استفاده از stream برای دریافت تدریجی
+        let body = '';
+        const reader = response.body;
+        
+        for await (const chunk of reader) {
+          body += chunk.toString();
+          
+          // اگر داده خیلی بزرگ است، continue
+          if (body.length > 1024 * 1024 * 10) { // 10MB
+            console.warn('داده بیش از حد بزرگ است');
+            break;
+          }
+        }
+        
+        return body;
+        
+      } catch (error) {
+        console.error(`خطا در تلاش ${i + 1}:`, error.message);
+        if (i === retries) throw error;
+        
+        // صبر قبل از تلاش مجدد
+        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
       }
     }
+  }
+  
+  try {
+    console.log('در حال دریافت داده از API نیشان...');
     
-    // 6. بررسی نهایی کیفیت داده
-    const finalBusCount = (processedData.match(/busNumber/g) || []).length;
+    // ابتدا با روش اصلی تلاش می‌کنیم
+    let body;
+    try {
+      body = await fetchCompleteBody(API_URL);
+    } catch (error) {
+      console.log('روش اول ناموفق، در حال استفاده از روش fallback...');
+      body = await fetchWithRetry(API_URL);
+    }
+    
+    console.log(`دریافت کامل شد. طول: ${body.length} کاراکتر`);
+    
+    // بررسی وجود @ (نشانه قطع شدن)
+    const hasAt = body.includes('@');
+    
+    // شمارش اتوبوس‌ها از روی رشته base64
+    const busCountMatch = body.match(/busNumber/g);
+    const busCount = busCountMatch ? busCountMatch.length : 0;
+    
+    // بررسی پایان معتبر base64
+    const hasValidEnd = body.endsWith('=') || body.endsWith('==') || 
+                       body.endsWith('}') || body.endsWith(']');
+    
+    // بررسی marker کامل بودن
+    const hasCompleteMarker = body.includes('}}==eyJsaW5lcyI6W3s=') || 
+                             (body.match(/busNumber/g) || []).length >= 8;
+    
+    // اگر داده حاوی @ است، ممکن است ناقص باشد
+    let isComplete = !hasAt && hasValidEnd;
+    
+    // اگر marker کامل وجود دارد، داده کامل است
+    if (hasCompleteMarker) {
+      isComplete = true;
+    }
+    
+    // اگر busCount کمتر از حد انتظار است، ممکن است ناقص باشد
+    if (busCount < 5) {
+      console.warn(`تعداد اتوبوس کم است: ${busCount}`);
+    }
     
     return res.status(200).json({
       success: true,
-      data: processedData,
-      originalLength: base64Data.length,
-      processedLength: processedData.length,
-      busCount: finalBusCount,
-      hadAtSymbol: finalData.includes('@'),
-      hadCompleteEnd: processedData.endsWith('=') || processedData.endsWith('==') || processedData.endsWith('}'),
-      fetchedAt: new Date().toISOString(),
-      wasFixed: wasFixed,
+      data: body, // کل بدنه به صورت رشته
+      originalLength: body.length,
+      processedLength: body.length,
+      busCount: busCount,
+      hadAtSymbol: hasAt,
+      hadCompleteEnd: hasValidEnd,
+      isComplete: isComplete,
       hasCompleteMarker: hasCompleteMarker,
-      dataPreview: processedData.substring(0, 100) + '...' + processedData.substring(processedData.length - 100)
+      fetchedAt: new Date().toISOString(),
+      note: 'این رشته base64 است و باید در مرحله decode پردازش شود'
     });
     
   } catch (error) {
-    console.error('خطای پروکسی:', error.message);
+    console.error('خطای نهایی در پروکسی:', error.message);
     return res.status(500).json({
       success: false,
-      error: error.message,
-      timestamp: new Date().toISOString()
+      error: `خطا در دریافت داده: ${error.message}`,
+      timestamp: new Date().toISOString(),
+      suggestion: 'لطفاً از endpoint اصلی مستقیماً درخواست بزنید'
     });
   }
 }
