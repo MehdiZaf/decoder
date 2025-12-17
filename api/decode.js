@@ -1,5 +1,5 @@
-// Neshan API Decoder - ULTIMATE VERSION
-// این کد تمام استثناها را مدیریت می‌کند
+// Neshan API Decoder - FINAL ULTIMATE VERSION
+// این کد فقط بخش JSON را استخراج و decode می‌کند
 
 export default async function handler(req, res) {
   // CORS headers
@@ -26,46 +26,172 @@ export default async function handler(req, res) {
     console.log('Data length:', data.length);
 
     // ------------------------------------------------------------
-    // STEP 1: استخراج ALL بخش‌های base64 از داده
+    // STEP 1: پیدا کردن بخش JSON (بعد از ==)
     // ------------------------------------------------------------
     
-    console.log('Extracting ALL base64 parts...');
+    console.log('Looking for JSON section...');
     
-    // الگو: پیدا کردن تمام sequenceهای base64
-    const base64Regex = /[A-Za-z0-9+/=]{20,}/g;
-    const allMatches = data.match(base64Regex) || [];
+    let jsonSection = '';
     
-    console.log('Found', allMatches.length, 'potential base64 segments');
+    // روش ۱: اگر == دارد، بخش بعد از == را بگیر
+    if (data.includes('==')) {
+      const eqIndex = data.indexOf('==');
+      const afterEq = data.substring(eqIndex + 2);
+      console.log('Found == at position', eqIndex);
+      
+      // بخش بعد از == تا اولین @ یا تا انتها
+      let endIndex = afterEq.length;
+      
+      // پیدا کردن @ بعد از ==
+      const atIndex = afterEq.indexOf('@');
+      if (atIndex !== -1) {
+        endIndex = atIndex;
+        console.log('Found @ after == at position', atIndex);
+      }
+      
+      jsonSection = afterEq.substring(0, endIndex);
+      console.log('Extracted JSON section after ==, length:', jsonSection.length);
+    }
     
-    // طولانی‌ترین segment را انتخاب کن (احتمالاً JSON است)
-    let longestSegment = '';
-    for (const match of allMatches) {
-      if (match.length > longestSegment.length) {
-        longestSegment = match;
+    // روش ۲: اگر == ندارد اما = دارد
+    else if (data.includes('=')) {
+      const lastEqIndex = data.lastIndexOf('=');
+      const afterLastEq = data.substring(lastEqIndex + 1);
+      console.log('Found last = at position', lastEqIndex);
+      
+      // بخش بعد از آخرین = تا اولین @ یا تا انتها
+      let endIndex = afterLastEq.length;
+      const atIndex = afterLastEq.indexOf('@');
+      if (atIndex !== -1) {
+        endIndex = atIndex;
+      }
+      
+      jsonSection = afterLastEq.substring(0, endIndex);
+      console.log('Extracted JSON section after last =, length:', jsonSection.length);
+    }
+    
+    // روش ۳: اگر هیچکدام نبود، کل داده
+    else {
+      jsonSection = data;
+      console.log('Using entire data as JSON section');
+    }
+    
+    // اگر هنوز خیلی طولانی است، eyJ را پیدا کن
+    if (jsonSection.length > 1000) {
+      const eyjIndex = jsonSection.indexOf('eyJ');
+      if (eyjIndex !== -1) {
+        jsonSection = jsonSection.substring(eyjIndex);
+        console.log('Trimmed to eyJ, new length:', jsonSection.length);
+      }
+    }
+
+    // ------------------------------------------------------------
+    // STEP 2: حذف تمام @ از JSON section
+    // ------------------------------------------------------------
+    
+    console.log('Removing all @ characters...');
+    let withoutAt = jsonSection.replace(/@/g, '');
+    console.log('After removing @:', withoutAt.length);
+
+    // ------------------------------------------------------------
+    // STEP 3: پیدا کردن پایان واقعی JSON base64
+    // ------------------------------------------------------------
+    
+    console.log('Finding exact JSON end...');
+    
+    // الگوهای پایان JSON در base64
+    const endPatterns = [
+      'In0=', 'fQ==', 'In19', 'fX0=', 'In1dfQ==', 'fV19',
+      'IiJ9', 'IiJdfQ==', 'W10=', 'XSw=', 'Iiw=',
+      '.png"', '.png"}', '.png"]}', '.png",', '.png"],',
+      'LnBuZw==', 'LnBuZyI=', 'LnBuZyJ9', 'LnBuZyJdfQ=='
+    ];
+    
+    let validBase64 = '';
+    let foundEnd = false;
+    
+    // جستجوی هر الگو
+    for (const pattern of endPatterns) {
+      const idx = withoutAt.indexOf(pattern);
+      if (idx !== -1) {
+        validBase64 = withoutAt.substring(0, idx + pattern.length);
+        console.log('Found end pattern:', pattern, 'at position', idx);
+        console.log('Valid base64 length:', validBase64.length);
+        foundEnd = true;
+        break;
       }
     }
     
-    if (!longestSegment) {
-      throw new Error('No base64 data found');
+    // اگر pattern پیدا نکردیم، از ابتدا تا انتهای string معتبر base64 را بگیر
+    if (!foundEnd) {
+      console.log('No end pattern found, finding valid base64...');
+      
+      // حذف کاراکترهای غیر base64 از انتها
+      let cleanEnd = '';
+      let lastValidIndex = withoutAt.length;
+      
+      for (let i = withoutAt.length - 1; i >= 0; i--) {
+        const char = withoutAt[i];
+        const code = withoutAt.charCodeAt(i);
+        
+        if (
+          (code >= 65 && code <= 90) || // A-Z
+          (code >= 97 && code <= 122) || // a-z
+          (code >= 48 && code <= 57) || // 0-9
+          code === 43 || // +
+          code === 47 || // /
+          code === 61    // =
+        ) {
+          cleanEnd = char + cleanEnd;
+        } else {
+          lastValidIndex = i;
+          break;
+        }
+      }
+      
+      validBase64 = withoutAt.substring(0, lastValidIndex);
+      console.log('Valid base64 by cleaning end, length:', validBase64.length);
     }
     
-    console.log('Longest segment length:', longestSegment.length);
-    console.log('First 100 chars:', longestSegment.substring(0, 100));
+    // اگر هنوز خیلی کوتاه است، مشکل داریم
+    if (validBase64.length < 50) {
+      console.log('Warning: Valid base64 too short, trying alternative...');
+      
+      // سعی کن base64 معتبر پیدا کنی
+      const base64Regex = /[A-Za-z0-9+/=]{100,}/g;
+      const matches = data.match(base64Regex) || [];
+      
+      for (const match of matches) {
+        // بررسی کن آیا با eyJ شروع می‌شود
+        if (match.startsWith('eyJ')) {
+          validBase64 = match;
+          console.log('Found base64 starting with eyJ, length:', validBase64.length);
+          break;
+        }
+      }
+      
+      // اگر هنوز پیدا نکردیم، طولانی‌ترین را بگیر
+      if (validBase64.length < 50 && matches.length > 0) {
+        validBase64 = matches.reduce((a, b) => a.length > b.length ? a : b);
+        console.log('Using longest base64 segment, length:', validBase64.length);
+      }
+    }
+    
+    console.log('Final base64 length:', validBase64.length);
+    console.log('First 100 chars:', validBase64.substring(0, 100));
+    console.log('Last 100 chars:', validBase64.substring(Math.max(0, validBase64.length - 100)));
 
     // ------------------------------------------------------------
-    // STEP 2: پاک‌سازی کامل base64
+    // STEP 4: پاک‌سازی کامل base64
     // ------------------------------------------------------------
     
-    console.log('Cleaning base64...');
-    
-    // حذف @ (همیشه مضر)
-    let cleaned = longestSegment.replace(/@/g, '');
+    console.log('Final cleaning of base64...');
     
     // فقط کاراکترهای base64 معتبر
-    let validChars = '';
-    for (let i = 0; i < cleaned.length; i++) {
-      const char = cleaned[i];
-      const code = cleaned.charCodeAt(i);
+    let cleanBase64 = '';
+    for (let i = 0; i < validBase64.length; i++) {
+      const char = validBase64[i];
+      const code = validBase64.charCodeAt(i);
       
       if (
         (code >= 65 && code <= 90) || // A-Z
@@ -75,109 +201,60 @@ export default async function handler(req, res) {
         code === 47 || // /
         code === 61    // =
       ) {
-        validChars += char;
-      } else {
-        console.log('Removed invalid character:', char, 'code:', code);
+        cleanBase64 += char;
       }
     }
     
-    console.log('Valid characters length:', validChars.length);
+    console.log('Clean base64 length:', cleanBase64.length);
 
     // ------------------------------------------------------------
-    // STEP 3: پیدا کردن طول معتبر base64 با روش‌های مختلف
+    // STEP 5: Decode با padding مناسب
     // ------------------------------------------------------------
     
-    console.log('Finding valid base64 length...');
+    // اضافه کردن padding
+    const paddingNeeded = (4 - (cleanBase64.length % 4)) % 4;
+    const paddedBase64 = cleanBase64 + '='.repeat(paddingNeeded);
     
-    let validLength = validChars.length;
-    let foundValid = false;
-    
-    // روش ۱: جستجوی الگوهای پایان JSON
-    const endPatterns = [
-      'In0=', 'fQ==', 'In19', 'fX0=', 'In1dfQ==', 'fV19',
-      'IiJ9', 'IiJdfQ==', 'W10=', 'XSw=', 'Iiw=', 'Iicl',
-      'LnBuZw==', 'LnBuZyI=', '.png"', '.png"}', '.png"]}'
-    ];
-    
-    for (const pattern of endPatterns) {
-      const idx = validChars.indexOf(pattern);
-      if (idx !== -1) {
-        validLength = idx + pattern.length;
-        console.log('Found end pattern:', pattern, 'at position', idx);
-        foundValid = true;
-        break;
-      }
-    }
-    
-    // روش ۲: اگر pattern پیدا نکردیم، decode تستی
-    if (!foundValid) {
-      console.log('No end pattern found, testing decode...');
-      
-      for (let testLength = validChars.length; testLength > 100; testLength--) {
-        const testStr = validChars.substring(0, testLength);
-        const padded = testStr + '='.repeat((4 - testStr.length % 4) % 4);
-        
-        try {
-          const decoded = Buffer.from(padded, 'base64').toString('utf8');
-          
-          // بررسی اینکه آیا decode موفق بود
-          if (decoded.length > 10 && decoded.includes('{') && decoded.includes('}')) {
-            // بررسی کاراکترهای کنترل
-            let hasControlChars = false;
-            for (let j = 0; j < decoded.length; j++) {
-              const code = decoded.charCodeAt(j);
-              if (code < 32 && code !== 9 && code !== 10 && code !== 13) {
-                hasControlChars = true;
-                break;
-              }
-            }
-            
-            if (!hasControlChars) {
-              validLength = testLength;
-              console.log('Found valid length by decode test:', validLength);
-              foundValid = true;
-              break;
-            }
-          }
-        } catch (e) {
-          // continue
-        }
-      }
-    }
-    
-    // اگر باز هم پیدا نکردیم، 90% طول را بگیر
-    if (!foundValid) {
-      validLength = Math.floor(validChars.length * 0.9);
-      console.log('Using 90% of length:', validLength);
-    }
-    
-    const finalBase64 = validChars.substring(0, validLength);
-    console.log('Final base64 length:', finalBase64.length);
-
-    // ------------------------------------------------------------
-    // STEP 4: Decode با error handling کامل
-    // ------------------------------------------------------------
-    
-    const padded = finalBase64 + '='.repeat((4 - finalBase64.length % 4) % 4);
-    console.log('Padded length:', padded.length);
+    console.log('Padded base64 length:', paddedBase64.length);
     
     let decoded;
     try {
-      decoded = Buffer.from(padded, 'base64').toString('utf8');
+      decoded = Buffer.from(paddedBase64, 'base64').toString('utf8');
       console.log('Decode successful, length:', decoded.length);
     } catch (e) {
       console.error('Decode failed:', e.message);
-      throw new Error('Base64 decode failed: ' + e.message);
+      
+      // اگر decode شکست خورد، سعی کن با حذف کاراکترهای اضافی
+      let fixedBase64 = cleanBase64;
+      
+      // حذف =های اضافی از وسط
+      fixedBase64 = fixedBase64.replace(/=+/g, '=');
+      fixedBase64 = fixedBase64.replace(/([^=])=([^=])/g, '$1$2');
+      
+      // فقط =های انتهایی را نگه دار
+      const lastEqIndex = fixedBase64.lastIndexOf('=');
+      if (lastEqIndex !== -1 && lastEqIndex < fixedBase64.length - 4) {
+        fixedBase64 = fixedBase64.substring(0, lastEqIndex + 1);
+      }
+      
+      const rePadded = fixedBase64 + '='.repeat((4 - fixedBase64.length % 4) % 4);
+      
+      try {
+        decoded = Buffer.from(rePadded, 'base64').toString('utf8');
+        console.log('Decode successful after fixing, length:', decoded.length);
+      } catch (e2) {
+        throw new Error('Base64 decode failed even after fixing: ' + e2.message);
+      }
     }
     
-    console.log('First 200 chars:', decoded.substring(0, 200));
-    console.log('Last 100 chars:', decoded.substring(Math.max(0, decoded.length - 100)));
+    console.log('First 200 chars decoded:', decoded.substring(0, 200));
+    console.log('Last 100 chars decoded:', decoded.substring(Math.max(0, decoded.length - 100)));
 
     // ------------------------------------------------------------
-    // STEP 5: پاک‌سازی کامل JSON از کاراکترهای کنترل
+    // STEP 6: پاک‌سازی کامل JSON از کاراکترهای کنترل
     // ------------------------------------------------------------
     
-    console.log('Cleaning control characters...');
+    console.log('Removing control characters...');
     
     let cleanJson = '';
     let removedCount = 0;
@@ -186,8 +263,7 @@ export default async function handler(req, res) {
       const char = decoded[i];
       const code = decoded.charCodeAt(i);
       
-      // فقط کاراکترهای مجاز:
-      // 9: tab, 10: newline, 13: carriage return, 32-126: printable ASCII, 128+: Unicode
+      // نگه داشتن: printable chars, newline, tab, carriage return, Unicode
       if (
         code === 9 ||    // \t
         code === 10 ||   // \n
@@ -198,216 +274,326 @@ export default async function handler(req, res) {
         cleanJson += char;
       } else {
         removedCount++;
-        // برای کاراکترهای کنترل، حذف کن (نه جایگزین با space)
+        // حذف کاراکتر کنترل
       }
     }
     
     console.log('Removed', removedCount, 'control characters');
     console.log('Clean JSON length:', cleanJson.length);
     
-    // حذف null bytes اگر وجود دارد
+    // حذف null bytes
     cleanJson = cleanJson.replace(/\0/g, '');
     
-    // حذف BOM اگر وجود دارد
+    // حذف BOM
     if (cleanJson.charCodeAt(0) === 0xFEFF) {
       cleanJson = cleanJson.substring(1);
     }
 
     // ------------------------------------------------------------
-    // STEP 6: Fix کردن JSON با روش‌های مختلف
+    // STEP 7: Extract و fix کردن JSON
     // ------------------------------------------------------------
     
-    console.log('Fixing JSON...');
+    console.log('Extracting and fixing JSON...');
     
-    // روش ۱: حذف trailing commas
-    let fixed = cleanJson.replace(/,\s*([}\]])/g, '$1');
+    // پیدا کردن اولین { یا [
+    const firstBrace = cleanJson.indexOf('{');
+    const firstBracket = cleanJson.indexOf('[');
     
-    // روش ۲: balance کردن quotes
+    let jsonStart = -1;
+    let isObject = true;
+    
+    if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+      jsonStart = firstBrace;
+      isObject = true;
+    } else if (firstBracket !== -1) {
+      jsonStart = firstBracket;
+      isObject = false;
+    } else {
+      throw new Error('No JSON structure found in decoded data');
+    }
+    
+    console.log('JSON starts at position', jsonStart, 'isObject:', isObject);
+    
+    // استخراج JSON با balance checking
+    let extracted = '';
+    let stack = [];
+    let inString = false;
+    let escape = false;
+    
+    for (let i = jsonStart; i < cleanJson.length; i++) {
+      const char = cleanJson[i];
+      
+      if (escape) {
+        extracted += char;
+        escape = false;
+        continue;
+      }
+      
+      if (char === '\\') {
+        extracted += char;
+        escape = true;
+        continue;
+      }
+      
+      if (char === '"' && !escape) {
+        inString = !inString;
+        extracted += char;
+        continue;
+      }
+      
+      if (!inString) {
+        if (char === '{' || char === '[') {
+          stack.push(char);
+          extracted += char;
+        } else if (char === '}' || char === ']') {
+          if (stack.length > 0) {
+            const last = stack[stack.length - 1];
+            if ((char === '}' && last === '{') || (char === ']' && last === '[')) {
+              stack.pop();
+              extracted += char;
+              
+              // اگر stack خالی شد، احتمالاً به پایان رسیدیم
+              if (stack.length === 0 && extracted.length > 100) {
+                // بررسی کن که آیا ساختار معقولی داریم
+                const openBraces = (extracted.match(/{/g) || []).length;
+                const closeBraces = (extracted.match(/}/g) || []).length;
+                const openBrackets = (extracted.match(/\[/g) || []).length;
+                const closeBrackets = (extracted.match(/\]/g) || []).length;
+                
+                if (openBraces === closeBraces && openBrackets === closeBrackets) {
+                  break;
+                }
+              }
+            } else {
+              // unmatched، skip
+            }
+          } else {
+            // extra closing، skip
+          }
+        } else {
+          extracted += char;
+        }
+      } else {
+        extracted += char;
+      }
+    }
+    
+    // اگر stack خالی نیست، آن را close کن
+    while (stack.length > 0) {
+      const last = stack.pop();
+      extracted += last === '{' ? '}' : ']';
+    }
+    
+    console.log('Extracted JSON length:', extracted.length);
+    console.log('First 200 chars extracted:', extracted.substring(0, 200));
+    console.log('Last 100 chars extracted:', extracted.substring(Math.max(0, extracted.length - 100)));
+
+    // ------------------------------------------------------------
+    // STEP 8: Fix کردن common JSON issues
+    // ------------------------------------------------------------
+    
+    console.log('Fixing common JSON issues...');
+    
+    let fixed = extracted;
+    
+    // 1. حذف trailing commas
+    fixed = fixed.replace(/,\s*([}\]])/g, '$1');
+    
+    // 2. balance کردن quotes
     const quotes = (fixed.match(/"/g) || []).length;
     if (quotes % 2 !== 0) {
       console.log('Fixing unbalanced quotes');
-      // quotes فرد است، یک " اضافه کن
       fixed += '"';
     }
     
-    // روش ۳: balance کردن braces و brackets
-    let openBraces = (fixed.match(/{/g) || []).length;
-    let closeBraces = (fixed.match(/}/g) || []).length;
-    let openBrackets = (fixed.match(/\[/g) || []).length;
-    let closeBrackets = (fixed.match(/\]/g) || []).length;
-    
-    console.log('Braces:', openBraces, 'open,', closeBraces, 'close');
-    console.log('Brackets:', openBrackets, 'open,', closeBrackets, 'close');
-    
-    // اضافه کردن }های از دست رفته
-    if (openBraces > closeBraces) {
-      const missing = openBraces - closeBraces;
-      console.log('Adding', missing, 'missing closing braces');
-      for (let i = 0; i < missing; i++) {
-        fixed += '}';
-      }
-      closeBraces += missing;
-    }
-    
-    // اضافه کردن ]های از دست رفته
-    if (openBrackets > closeBrackets) {
-      const missing = openBrackets - closeBrackets;
-      console.log('Adding', missing, 'missing closing brackets');
-      for (let i = 0; i < missing; i++) {
-        fixed += ']';
-      }
-      closeBrackets += missing;
-    }
-    
-    // روش ۴: fix کردن broken URLs (مشکل رایج)
-    if (fixed.includes('http') && !fixed.includes('.png"')) {
-      // اگر URL قطع شده، آن را کامل کن
-      const urlMatch = fixed.match(/https?:\/\/[^"]+/);
-      if (urlMatch && !urlMatch[0].endsWith('.png')) {
-        console.log('Fixing broken URL');
-        fixed = fixed.replace(urlMatch[0], urlMatch[0] + '.png"');
+    // 3. fix کردن broken URLs
+    if (fixed.includes('http') && fixed.includes('static.neshan.org')) {
+      // پیدا کردن URLهای قطع شده
+      const urlRegex = /https?:\/\/static\.neshan\.org[^"]*/g;
+      const urlMatches = fixed.match(urlRegex) || [];
+      
+      for (const url of urlMatches) {
+        if (!url.endsWith('.png')) {
+          const fixedUrl = url + '.png';
+          fixed = fixed.replace(url, fixedUrl);
+          console.log('Fixed broken URL:', url.substring(0, 50) + '...');
+        }
       }
     }
+    
+    // 4. حذف کاراکترهای عجیب و غریب
+    fixed = fixed.replace(/[^\x20-\x7E\u0600-\u06FF\uFB8A\u067E\u0686\u06AF\u200C\u200F]/g, '');
     
     console.log('Fixed JSON length:', fixed.length);
-    console.log('Fixed last 100 chars:', fixed.substring(Math.max(0, fixed.length - 100)));
 
     // ------------------------------------------------------------
-    // STEP 7: Parse JSON با fallbackهای متعدد
+    // STEP 9: Parse JSON
     // ------------------------------------------------------------
     
-    console.log('Parsing JSON with multiple fallbacks...');
+    console.log('Parsing JSON...');
     
-    let jsonData = null;
-    let parseMethod = '';
+    let jsonData;
     
-    // لیست روش‌های parse
-    const parseMethods = [
-      {
-        name: 'direct',
-        parse: (str) => JSON.parse(str)
-      },
-      {
-        name: 'remove_trailing_commas',
-        parse: (str) => JSON.parse(str.replace(/,\s*([}\]])/g, '$1'))
-      },
-      {
-        name: 'fix_quotes',
-        parse: (str) => JSON.parse(str.replace(/'/g, '"').replace(/(\w+):/g, '"$1":'))
-      },
-      {
-        name: 'extract_object',
-        parse: (str) => {
-          const firstBrace = str.indexOf('{');
-          const lastBrace = str.lastIndexOf('}');
-          if (firstBrace !== -1 && lastBrace !== -1) {
-            return JSON.parse(str.substring(firstBrace, lastBrace + 1));
-          }
-          throw new Error('No object found');
-        }
-      },
-      {
-        name: 'extract_array',
-        parse: (str) => {
-          const firstBracket = str.indexOf('[');
-          const lastBracket = str.lastIndexOf(']');
-          if (firstBracket !== -1 && lastBracket !== -1) {
-            return JSON.parse(str.substring(firstBracket, lastBracket + 1));
-          }
-          throw new Error('No array found');
-        }
-      }
-    ];
-    
-    // امتحان همه روش‌ها
-    for (const method of parseMethods) {
+    try {
+      jsonData = JSON.parse(fixed);
+      console.log('JSON parse successful');
+    } catch (e) {
+      console.log('JSON parse failed:', e.message);
+      
+      // یک بار دیگر fix کن
+      const reFixed = fixed
+        .replace(/'/g, '"')
+        .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":')
+        .replace(/:\s*'([^']+)'/g, ':"$1"');
+      
       try {
-        jsonData = method.parse(fixed);
-        parseMethod = method.name;
-        console.log('Parse successful with method:', method.name);
-        break;
-      } catch (e) {
-        console.log('Parse failed with method', method.name, ':', e.message);
+        jsonData = JSON.parse(reFixed);
+        console.log('JSON parse successful after re-fixing');
+      } catch (e2) {
+        console.log('Re-fix also failed:', e2.message);
+        
+        // آخرین تلاش: extract با regex
+        const simpleRegex = isObject ? 
+          /(\{[^{}]*(\{[^{}]*\}[^{}]*)*\})/ :
+          /(\[[^\[\]]*(\[[^\[\]]*\][^\[\]]*)*\])/;
+        
+        const match = fixed.match(simpleRegex);
+        if (match) {
+          try {
+            jsonData = JSON.parse(match[0]);
+            console.log('JSON parse successful with regex extraction');
+          } catch (e3) {
+            console.log('Regex extraction failed:', e3.message);
+            jsonData = { lines: [], error: 'Could not parse JSON' };
+          }
+        } else {
+          jsonData = { lines: [], error: 'No valid JSON found' };
+        }
       }
-    }
-    
-    // اگر همه روش‌ها شکست خوردند، manual reconstruction
-    if (!jsonData) {
-      console.log('All parse methods failed, attempting manual reconstruction...');
-      jsonData = manualJsonReconstruction(fixed);
-      parseMethod = 'manual_reconstruction';
     }
 
     // ------------------------------------------------------------
-    // STEP 8: نرمال‌سازی ساختار داده
+    // STEP 10: نرمال‌سازی داده‌ها
     // ------------------------------------------------------------
     
-    console.log('Normalizing data structure...');
+    console.log('Normalizing data...');
     
-    // حالت ۱: اگر root object است و lines دارد
-    if (jsonData && typeof jsonData === 'object' && jsonData.lines) {
-      if (!Array.isArray(jsonData.lines)) {
-        jsonData.lines = [jsonData.lines];
-      }
-    }
-    // حالت ۲: اگر root array است (مستقیم lines است)
-    else if (jsonData && Array.isArray(jsonData)) {
-      jsonData = { lines: jsonData };
-    }
-    // حالت ۳: اگر object است اما lines ندارد (یک اتوبوس)
-    else if (jsonData && typeof jsonData === 'object' && jsonData.busNumber) {
-      jsonData = { lines: [jsonData] };
-    }
-    // حالت ۴: اگر چیزی parse نشد
-    else if (!jsonData || typeof jsonData !== 'object') {
-      jsonData = { lines: [], error: 'Could not parse bus data' };
-    }
-    
-    // بررسی و fix کردن هر خط اتوبوس
-    if (jsonData.lines && Array.isArray(jsonData.lines)) {
-      console.log('Processing', jsonData.lines.length, 'bus lines');
-      
-      const validLines = [];
-      
-      for (let i = 0; i < jsonData.lines.length; i++) {
-        const line = jsonData.lines[i];
-        
-        // اگر line معتبر نیست، skip کن
-        if (!line || typeof line !== 'object') {
-          console.log('Skipping invalid line at index', i);
-          continue;
+    // اگر خطا داریم، برگردان
+    if (jsonData.error) {
+      return res.status(200).json({
+        success: false,
+        data: jsonData,
+        metadata: {
+          processingTime: new Date().toISOString(),
+          error: jsonData.error
         }
-        
-        // fix کردن properties
-        const fixedLine = {
-          busNumber: String(line.busNumber || line.busnumber || ''),
-          title: String(line.title || ''),
-          etaText: String(line.etaText || line.etatext || line.eta || ''),
-          etaValue: line.etaValue !== undefined ? line.etaValue : 
-                    line.etavalue !== undefined ? line.etavalue : null,
-          originName: String(line.originName || line.originname || line.origin || ''),
-          destinationName: String(line.destinationName || line.destinationname || line.destination || ''),
-          iconUrl: String(line.iconUrl || line.iconurl || line.icon || ''),
-          slug: line.slug || null
-        };
-        
-        // حذف خطوط خالی
-        if (fixedLine.busNumber || fixedLine.title) {
-          validLines.push(fixedLine);
-        }
-      }
-      
-      jsonData.lines = validLines;
-      console.log('Valid lines after processing:', jsonData.lines.length);
-      
-      // نمایش نمونه
-      jsonData.lines.slice(0, 3).forEach((line, idx) => {
-        console.log(`  ${idx + 1}. Bus ${line.busNumber}: ${line.title} - ETA: ${line.etaText}`);
       });
     }
+    
+    // حالت‌های مختلف ساختار داده
+    let lines = [];
+    
+    // حالت ۱: lines array
+    if (jsonData.lines && Array.isArray(jsonData.lines)) {
+      lines = jsonData.lines;
+    }
+    // حالت ۲: root array (مستقیم lines)
+    else if (Array.isArray(jsonData)) {
+      lines = jsonData;
+      jsonData = { lines: jsonData };
+    }
+    // حالت ۳: single object با busNumber
+    else if (jsonData.busNumber) {
+      lines = [jsonData];
+      jsonData = { lines: lines };
+    }
+    // حالت ۴: object با properties مختلف
+    else if (typeof jsonData === 'object') {
+      // بررسی کن آیا properties شبیه bus دارد
+      const busKeys = Object.keys(jsonData).filter(k => 
+        k.includes('bus') || k.includes('Bus') || 
+        k.includes('line') || k.includes('Line')
+      );
+      
+      if (busKeys.length > 0) {
+        lines = [jsonData];
+        jsonData = { lines: lines };
+      }
+    }
+    
+    // پاک‌سازی و فرمت کردن هر خط
+    const processedLines = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      
+      if (!line || typeof line !== 'object') {
+        continue;
+      }
+      
+      // استخراج مقادیر از هر نام ممکن
+      const busNumber = String(
+        line.busNumber || line.busnumber || line.bus || 
+        line.number || line.line || line.route || ''
+      );
+      
+      const title = String(
+        line.title || line.name || line.routeName || ''
+      );
+      
+      const etaText = String(
+        line.etaText || line.etatext || line.eta || 
+        line.arrival || line.time || ''
+      );
+      
+      const etaValue = line.etaValue !== undefined ? line.etaValue :
+                      line.etavalue !== undefined ? line.etavalue :
+                      line.value !== undefined ? line.value : null;
+      
+      const originName = String(
+        line.originName || line.originname || line.origin || 
+        line.from || line.start || ''
+      );
+      
+      const destinationName = String(
+        line.destinationName || line.destinationname || 
+        line.destination || line.to || line.end || ''
+      );
+      
+      const iconUrl = String(
+        line.iconUrl || line.iconurl || line.icon || 
+        line.image || line.url || ''
+      );
+      
+      const slug = line.slug || null;
+      
+      // فقط اگر داده معتبری داریم اضافه کن
+      if (busNumber || title) {
+        processedLines.push({
+          busNumber,
+          title,
+          etaText,
+          etaValue,
+          originName,
+          destinationName,
+          iconUrl,
+          slug
+        });
+      }
+    }
+    
+    // به روز کردن jsonData
+    jsonData.lines = processedLines;
+    
+    console.log('Processed', processedLines.length, 'bus lines');
+    
+    // نمایش نمونه
+    processedLines.slice(0, Math.min(3, processedLines.length)).forEach((line, idx) => {
+      console.log(`  ${idx + 1}. Bus ${line.busNumber}: ${line.title} - ETA: ${line.etaText}`);
+    });
 
     // ------------------------------------------------------------
-    // STEP 9: برگرداندن نتیجه
+    // STEP 11: برگرداندن نتیجه
     // ------------------------------------------------------------
     
     console.log('Process completed successfully');
@@ -418,9 +604,8 @@ export default async function handler(req, res) {
       metadata: {
         processingTime: new Date().toISOString(),
         originalLength: data.length,
-        cleanJsonLength: cleanJson.length,
-        linesCount: jsonData.lines ? jsonData.lines.length : 0,
-        parseMethod: parseMethod
+        linesCount: processedLines.length,
+        decodedLength: decoded.length
       }
     });
 
@@ -428,148 +613,15 @@ export default async function handler(req, res) {
     console.error('FATAL ERROR:', error.message);
     console.error('Error stack:', error.stack);
     
-    // حتی در صورت خطا، یک پاسخ ساختاریافته برگردان
-    return res.status(500).json({
+    // حتی در صورت خطا، ساختار صحیح برگردان
+    return res.status(200).json({
       success: false,
-      error: 'Processing failed',
-      message: error.message,
       data: { lines: [] },
-      timestamp: new Date().toISOString()
+      error: error.message,
+      metadata: {
+        processingTime: new Date().toISOString(),
+        error: 'Processing failed'
+      }
     });
-  }
-}
-
-// ------------------------------------------------------------
-// تابع manualJsonReconstruction
-// ------------------------------------------------------------
-
-function manualJsonReconstruction(str) {
-  console.log('Manual JSON reconstruction');
-  console.log('Input length:', str.length);
-  
-  // پیدا کردن شروع اولین { یا [
-  const firstBrace = str.indexOf('{');
-  const firstBracket = str.indexOf('[');
-  
-  let start = -1;
-  let isObject = true;
-  
-  if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
-    start = firstBrace;
-    isObject = true;
-    console.log('Starting with object at position', start);
-  } else if (firstBracket !== -1) {
-    start = firstBracket;
-    isObject = false;
-    console.log('Starting with array at position', start);
-  } else {
-    throw new Error('No JSON structure found');
-  }
-  
-  // بازسازی دستی
-  let result = '';
-  let stack = [];
-  let inString = false;
-  let escape = false;
-  
-  for (let i = start; i < str.length; i++) {
-    const char = str[i];
-    
-    if (escape) {
-      result += char;
-      escape = false;
-      continue;
-    }
-    
-    if (char === '\\') {
-      result += char;
-      escape = true;
-      continue;
-    }
-    
-    if (char === '"' && !escape) {
-      inString = !inString;
-      result += char;
-      continue;
-    }
-    
-    if (!inString) {
-      if (char === '{' || char === '[') {
-        stack.push(char);
-        result += char;
-      } else if (char === '}' || char === ']') {
-        if (stack.length > 0) {
-          const last = stack[stack.length - 1];
-          if ((char === '}' && last === '{') || (char === ']' && last === '[')) {
-            stack.pop();
-            result += char;
-          } else {
-            // unmatched، skip
-          }
-        } else {
-          // extra closing، skip
-        }
-      } else {
-        // فقط کاراکترهای معتبر را اضافه کن
-        const code = char.charCodeAt(0);
-        if (code >= 32 && code <= 126 || code >= 128) {
-          result += char;
-        }
-      }
-    } else {
-      // در string هستیم، همه کاراکترها را اضافه کن (به جز کنترل‌کاراکترها)
-      const code = char.charCodeAt(0);
-      if (code >= 32 || code === 9 || code === 10 || code === 13) {
-        result += char;
-      }
-    }
-    
-    // اگر stack خالی شد، احتمالاً به پایان رسیدیم
-    if (stack.length === 0 && result.length > 50) {
-      // بررسی کن که آیا ساختار معقولی داریم
-      if ((isObject && result.includes('}')) || (!isObject && result.includes(']'))) {
-        break;
-      }
-    }
-  }
-  
-  // اگر stack خالی نیست، آن را close کن
-  while (stack.length > 0) {
-    const last = stack.pop();
-    result += last === '{' ? '}' : ']';
-  }
-  
-  console.log('Reconstructed length:', result.length);
-  console.log('Result sample:', result.substring(0, 200));
-  
-  try {
-    // یک بار fix common issues
-    const fixed = result
-      .replace(/,\s*([}\]])/g, '$1')
-      .replace(/'/g, '"')
-      .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":')
-      .replace(/:\s*'([^']+)'/g, ':"$1"');
-    
-    return JSON.parse(fixed);
-  } catch (e) {
-    console.log('Reconstruction parse failed:', e.message);
-    
-    // آخرین تلاش: extract با regex ساده
-    const simpleMatch = str.match(/(\{[^{}]*(\{[^{}]*\}[^{}]*)*\})|(\[[^\[\]]*(\[[^\[\]]*\][^\[\]]*)*\])/);
-    if (simpleMatch) {
-      try {
-        const simpleJson = simpleMatch[0]
-          .replace(/[^\x20-\x7E\u0600-\u06FF]/g, '') // حذف non-printable
-          .replace(/,\s*([}\]])/g, '$1');
-        
-        return JSON.parse(simpleJson);
-      } catch (e2) {
-        // return empty structure
-        return { lines: [] };
-      }
-    }
-    
-    // return empty structure
-    return { lines: [] };
   }
 }
