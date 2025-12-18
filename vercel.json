@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/decode/index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/decode",
+      "methods": ["POST", "OPTIONS"],
+      "dest": "/api/decode"
+    }
+  ]
+}
