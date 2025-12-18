@@ -5,7 +5,7 @@
   "main": "api/decode/index.js",
   "scripts": {
     "dev": "vercel dev",
-    "start": "node api/decode/index.js"
+    "start": "node api/decode.js"
   },
   "dependencies": {},
   "devDependencies": {
